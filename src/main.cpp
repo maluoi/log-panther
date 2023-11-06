@@ -75,8 +75,8 @@ GLFWimage load_icon_image(int resource_id) ;
 
 ///////////////////////////////////////////
 
-int main() {
-	printf("Starting...\n");
+//int main() {
+int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow) {
 	if (!device_finder_start(&device_finder)) {
 		printf("Could not start device finder\n");
 		return 1;
@@ -84,10 +84,6 @@ int main() {
 	device_autoconnect = true;
 	
 	logcat_create(&logcat);
-	/*if (!logcat_thread_start(nullptr, &logcat_thread, &logcat)) {
-		printf("Could not start logcat thread\n");
-		return 1;
-	}*/
 
 	glfwInit();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
@@ -95,7 +91,7 @@ int main() {
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE,        GLFW_OPENGL_CORE_PROFILE);
 
-	GLFWwindow *window = glfwCreateWindow(1280, 720, "LogPanther",
+	GLFWwindow *window = glfwCreateWindow(1280, 720, "log-panther",
 										  nullptr, nullptr);
 	if (window == nullptr) {
 		printf("Could not create GLFW window\n");
@@ -264,7 +260,7 @@ void window_log() {
 	ImGui::Begin("Logcat");
 	{
 		//if (device_finder.state == device_finder_state_finished || device_finder.state == device_finder_state_searching) {
-			const char *show_name = "Connect device...";
+			const char *show_name = device_finder.state == device_finder_state_error ? "Error" : "Connect device...";
 			char show_name_buffer[128];
 			if (logcat_thread.run) {
 				for (int n = 0; n < device_finder.devices.count; n++) {

@@ -24,7 +24,7 @@ set(GLAD_DIR "${LIBRARIES_DIR}/glad")
 set(GLFW_DIR "${LIBRARIES_DIR}/glfw")
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-add_executable(log-panther
+add_executable(log-panther WIN32
         vendor/imgui_impl_glfw.h
         vendor/imgui_impl_glfw.cpp
         vendor/imgui_impl_opengl3.h
@@ -45,7 +45,10 @@ add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
                    ${CMAKE_SOURCE_DIR}/src/CascadiaMono.ttf
                    $<TARGET_FILE_DIR:${PROJECT_NAME}>)
 
+
 install(TARGETS ${PROJECT_NAME})
+install(TARGETS ${PROJECT_NAME} RUNTIME DESTINATION /)
+install(FILES ${CMAKE_SOURCE_DIR}/src/CascadiaMono.ttf DESTINATION /)
 
 # glad
 add_library("glad" "${GLAD_DIR}/src/glad.c")

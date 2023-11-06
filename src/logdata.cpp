@@ -50,21 +50,21 @@ int32_t logcat_thread_start(const char *device_id, logcat_thread_t *out_thread, 
 
 	char command[1024];
 	if (device_id == nullptr) {
-		snprintf(command, 1024, "adb logcat -T 0");
+		snprintf(command, 1024, "adb logcat -T 1");
 	} else {
-		snprintf(command, 1024, "adb -s %s logcat -T 0", device_id);
+		snprintf(command, 1024, "adb -s %s logcat -T 1", device_id);
 	}
 
 	STARTUPINFO start_info = {};
-	start_info.cb = sizeof(STARTUPINFO);
+	start_info.cb         = sizeof(STARTUPINFO);
 	start_info.hStdOutput = stdout_write;
-	start_info.dwFlags |= STARTF_USESTDHANDLES;
+	start_info.dwFlags   |= STARTF_USESTDHANDLES;
 	if (!CreateProcess(NULL,
 					   (LPSTR)command, // Command line
 					   NULL, // Process handle not inheritable
 					   NULL, // Thread handle not inheritable
 					   TRUE, // Set handle inheritance to TRUE
-					   0,    // No creation flags
+					   CREATE_NO_WINDOW,    // No creation flags
 					   NULL, // Use parent's environment block
 					   NULL, // Use parent's starting directory
 					   &start_info, // Pointer to STARTUPINFO structure
@@ -100,7 +100,6 @@ int32_t logcat_thread_start(const char *device_id, logcat_thread_t *out_thread, 
 void logcat_thread_end(logcat_thread_t *ref_thread) {
 	if (ref_thread->run == false) return;
 
-	printf("Requesting termination\n");
 	TerminateProcess(&ref_thread->proc_info, 1);
 
 	ref_thread->run = false;
@@ -175,8 +174,6 @@ void logcat_clear(logcat_data_t *data) {
 ///////////////////////////////////////////
 
 DWORD __stdcall logcat_thread(void* arg) {
-	printf("logcat thread started\n");
-
 	logcat_thread_t *thread = (logcat_thread_t*)arg;
 	char    buffer      [4096+1];
 	char    line_buffer [4096+1];
@@ -236,8 +233,6 @@ DWORD __stdcall logcat_thread(void* arg) {
 		}
 	}
 	thread->run = false;
-	
-	printf("logcat thread ended\n");
 
 	return 0;
 }

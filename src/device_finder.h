@@ -22,10 +22,7 @@ struct device_info_t {
 struct device_finder_t {
     device_finder_state_   state;
     array_t<device_info_t> devices;
-
-    HANDLE               stdout_read;
-	HANDLE               thread;
-	PROCESS_INFORMATION  proc_info;
+	HANDLE                 thread;
 };
 
 bool device_finder_start  (device_finder_t *out_finder);
