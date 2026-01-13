@@ -3,28 +3,42 @@ project(log-panther
         VERSION 1.0
         DESCRIPTION "A nice tool for looking at ADB logcats")
 
-# For creating application installer
-set(CPACK_PACKAGE_NAME                 ${PROJECT_NAME})
-set(CPACK_PACKAGE_VENDOR               ${PROJECT_NAME})
-set(CPACK_PACKAGE_INSTALL_DIRECTORY    ${PROJECT_NAME})
-set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY ${PROJECT_NAME})
-set(CPACK_PACKAGE_VERSION              ${PROJECT_VERSION})
-set(CPACK_PACKAGE_DESCRIPTION          ${PROJECT_DESCRIPTION})
-set(CPACK_PACKAGE_DESCRIPTION_SUMMARY  ${PROJECT_DESCRIPTION})
-set(CPACK_PACKAGE_HOMEPAGE_URL         "https://github.com/maluoi/log-panther")
-set(CPACK_PACKAGE_EXECUTABLES          log-panther;log-panther)
-SET(CPACK_NSIS_INSTALLED_ICON_NAME     "bin/log-panther.exe")
-SET(CPACK_NSIS_IGNORE_LICENSE_PAGE     "ON")
-include(CPack)
+# For creating application installer (Windows-only for now)
+if(WIN32)
+    set(CPACK_PACKAGE_NAME                 ${PROJECT_NAME})
+    set(CPACK_PACKAGE_VENDOR               ${PROJECT_NAME})
+    set(CPACK_PACKAGE_INSTALL_DIRECTORY    ${PROJECT_NAME})
+    set(CPACK_PACKAGE_INSTALL_REGISTRY_KEY ${PROJECT_NAME})
+    set(CPACK_PACKAGE_VERSION              ${PROJECT_VERSION})
+    set(CPACK_PACKAGE_DESCRIPTION          ${PROJECT_DESCRIPTION})
+    set(CPACK_PACKAGE_DESCRIPTION_SUMMARY  ${PROJECT_DESCRIPTION})
+    set(CPACK_PACKAGE_HOMEPAGE_URL         "https://github.com/maluoi/log-panther")
+    set(CPACK_PACKAGE_EXECUTABLES          log-panther;log-panther)
+    SET(CPACK_NSIS_INSTALLED_ICON_NAME     "bin/log-panther.exe")
+    SET(CPACK_NSIS_IGNORE_LICENSE_PAGE     "ON")
+    include(CPack)
+endif()
 
 set(CMAKE_CXX_STANDARD 20)
 set(LIBRARIES_DIR lib)
 set(IMGUI_DIR "${LIBRARIES_DIR}/imgui")
 set(GLAD_DIR "${LIBRARIES_DIR}/glad")
 set(GLFW_DIR "${LIBRARIES_DIR}/glfw")
-set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 
-add_executable(log-panther WIN32
+# Platform-specific settings
+if(WIN32)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    set(PLATFORM_SOURCES
+        src/platform_win32.cpp
+        src/resources.rc)
+    set(EXECUTABLE_TYPE WIN32)
+else()
+    set(PLATFORM_SOURCES
+        src/platform_linux.cpp)
+    set(EXECUTABLE_TYPE "")
+endif()
+
+add_executable(log-panther ${EXECUTABLE_TYPE}
         vendor/imgui_impl_glfw.h
         vendor/imgui_impl_glfw.cpp
         vendor/imgui_impl_opengl3.h
@@ -37,7 +51,7 @@ add_executable(log-panther WIN32
         src/main.cpp
         src/logdata.cpp
         src/device_finder.cpp
-        src/resources.rc)
+        ${PLATFORM_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${IMGUI_DIR}/include")
 add_custom_command(TARGET ${PROJECT_NAME} POST_BUILD
@@ -65,3 +79,8 @@ add_subdirectory("${GLFW_DIR}")
 target_link_libraries(${PROJECT_NAME} "glfw" "${GLFW_LIBRARIES}")
 target_include_directories(${PROJECT_NAME} PRIVATE "${GLFW_DIR}/include")
 target_compile_definitions(${PROJECT_NAME} PRIVATE "GLFW_INCLUDE_NONE")
+
+# Platform-specific libraries
+if(UNIX AND NOT APPLE)
+    target_link_libraries(${PROJECT_NAME} pthread)
+endif()

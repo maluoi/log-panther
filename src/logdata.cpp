@@ -2,17 +2,18 @@
 #include "logdata.h"
 
 #include <stdio.h>
+#include <string.h>
 
 ///////////////////////////////////////////
 
-DWORD __stdcall logcat_thread    (void* arg);
-logcat_line_t   logcat_parse_line(char *line_buffer, char *out_tag);
+int           logcat_thread    (void* arg);
+logcat_line_t logcat_parse_line(char *line_buffer, char *out_tag);
 
 ///////////////////////////////////////////
 
 void logcat_create (logcat_data_t *out_data) {
 	*out_data = {};
-	InitializeCriticalSection(&out_data->lines_section);
+	out_data->lines_mutex = platform_mutex_create();
 }
 
 ///////////////////////////////////////////
@@ -24,7 +25,7 @@ void logcat_destroy(logcat_data_t *ref_data) {
 		free(ref_data->tags[i]);
 	ref_data->lines.free();
 	ref_data->tags .free();
-	DeleteCriticalSection(&ref_data->lines_section);
+	platform_mutex_destroy(ref_data->lines_mutex);
 
 	*ref_data = {};
 }
@@ -39,15 +40,6 @@ int32_t logcat_thread_start(const char *device_id, logcat_thread_t *out_thread, 
 	out_thread->run = true;
 	strncpy(out_data->src_id, device_id, sizeof(out_data->src_id));
 
-	HANDLE stdout_write = {};
-	SECURITY_ATTRIBUTES saAttr = {};
-	saAttr.nLength        = sizeof(SECURITY_ATTRIBUTES);
-	saAttr.bInheritHandle = true;
-	if (!CreatePipe(&out_thread->stdout_read, &stdout_write, &saAttr, 0)) {
-		printf("Stdout CreatePipe");
-		return -1;
-	}
-
 	char command[1024];
 	if (device_id == nullptr) {
 		snprintf(command, 1024, "adb logcat -T 1");
@@ -55,41 +47,22 @@ int32_t logcat_thread_start(const char *device_id, logcat_thread_t *out_thread, 
 		snprintf(command, 1024, "adb -s %s logcat -T 1", device_id);
 	}
 
-	STARTUPINFO start_info = {};
-	start_info.cb         = sizeof(STARTUPINFO);
-	start_info.hStdOutput = stdout_write;
-	start_info.dwFlags   |= STARTF_USESTDHANDLES;
-	if (!CreateProcess(NULL,
-					   (LPSTR)command, // Command line
-					   NULL, // Process handle not inheritable
-					   NULL, // Thread handle not inheritable
-					   TRUE, // Set handle inheritance to TRUE
-					   CREATE_NO_WINDOW,    // No creation flags
-					   NULL, // Use parent's environment block
-					   NULL, // Use parent's starting directory
-					   &start_info, // Pointer to STARTUPINFO structure
-					   &out_thread->proc_info) // Pointer to PROCESS_INFORMATION structure
-	) {
-		printf("CreateProcess failed (%d).\n", GetLastError());
-		return -2;
+	platform_process_result_t proc = platform_process_start(command);
+	if (!proc.success) {
+		printf("Failed to start logcat process\n");
+		return -1;
 	}
 
-	CloseHandle(stdout_write);
+	out_thread->process = proc.process;
+	out_thread->stdout_pipe = proc.stdout_pipe;
 
 	// Create thread to read from the child process' standard output
-	DWORD thread_id;
-	out_thread->thread = CreateThread(
-		NULL,          // default security attributes
-		0,             // use default stack size
-		logcat_thread, // thread function
-		out_thread,    // argument to thread function
-		0,             // use default creation flags
-		&thread_id     // returns the thread identifier
-	);
+	out_thread->thread = platform_thread_create(logcat_thread, out_thread);
 
 	if (out_thread->thread == nullptr) {
-		printf("CreateThread failed (%d).\n", GetLastError());
-		return -3;
+		printf("Failed to create logcat thread\n");
+		platform_process_cleanup(proc.process);
+		return -2;
 	}
 
 	return 1;
@@ -100,15 +73,12 @@ int32_t logcat_thread_start(const char *device_id, logcat_thread_t *out_thread, 
 void logcat_thread_end(logcat_thread_t *ref_thread) {
 	if (ref_thread->run == false) return;
 
-	TerminateProcess(&ref_thread->proc_info, 1);
+	platform_process_terminate(ref_thread->process);
 
 	ref_thread->run = false;
-	WaitForSingleObject(ref_thread->thread, INFINITE);
-	CloseHandle        (ref_thread->thread);
+	platform_thread_join(ref_thread->thread);
 
-	CloseHandle(ref_thread->proc_info.hProcess);
-	CloseHandle(ref_thread->proc_info.hThread);
-	CloseHandle(ref_thread->stdout_read);
+	platform_process_cleanup(ref_thread->process);
 }
 
 ///////////////////////////////////////////
@@ -163,17 +133,17 @@ uint16_t logcat_get_tag(logcat_data_t *data, char *tag) {
 ///////////////////////////////////////////
 
 void logcat_clear(logcat_data_t *data) {
-	EnterCriticalSection(&data->lines_section);
+	platform_mutex_lock(data->lines_mutex);
 	for (int32_t i = 0; i < data->lines.count; i+=1) free(data->lines[i].line);
 	for (int32_t i = 0; i < data->tags.count;  i+=1) free(data->tags [i]);
 	data->lines.clear();
 	data->tags .clear();
-	LeaveCriticalSection(&data->lines_section);
+	platform_mutex_unlock(data->lines_mutex);
 }
 
 ///////////////////////////////////////////
 
-DWORD __stdcall logcat_thread(void* arg) {
+int logcat_thread(void* arg) {
 	logcat_thread_t *thread = (logcat_thread_t*)arg;
 	char    buffer      [4096+1];
 	char    line_buffer [4096+1];
@@ -183,34 +153,20 @@ DWORD __stdcall logcat_thread(void* arg) {
 
 	while (thread->run) {
 		// Make sure the process is still running
-		DWORD exit_code;
-		if (GetExitCodeProcess(thread->proc_info.hProcess, &exit_code)) {
-			if (exit_code != STILL_ACTIVE)
-				break;
+		if (!platform_process_is_running(thread->process)) {
+			break;
 		}
 
-		// Check to see if the process has written anything to stdout, we want
-		// to skip reading and keep the thread interactive if not.
-		DWORD peekRead;
-		DWORD peekAvailable;
-		DWORD peekLeft;
-		BOOL  result = PeekNamedPipe(
-			thread->stdout_read, // Handle to the pipe
-			buffer,              // Pointer to the buffer to receive data
-			sizeof(buffer),      // Size of the buffer
-			&peekRead,           // Pointer to the variable to receive the number of bytes read
-			&peekAvailable,      // Pointer to the variable to receive the total number of bytes available to read
-			&peekLeft // Pointer to the variable to receive the number of bytes remaining in this message
-		);
-		if (!result || peekAvailable == 0) {
-			Sleep(1);
+		// Check if data is available
+		int32_t available = platform_pipe_peek(thread->stdout_pipe);
+		if (available <= 0) {
+			platform_sleep_ms(1);
 			continue;
 		}
 
 		// Read the data from stdout, and add it to the logs.
-		DWORD read;
-		bool  succeed = ReadFile(thread->stdout_read, buffer, 4096, &read, NULL);
-		if (!succeed || read == 0) continue;
+		int32_t read = platform_pipe_read(thread->stdout_pipe, buffer, 4096);
+		if (read <= 0) continue;
 
 		buffer[read] = '\0';
 
@@ -222,10 +178,10 @@ DWORD __stdcall logcat_thread(void* arg) {
 				logcat_line_t line_data = logcat_parse_line(line_buffer, tag);
 
 				if (!thread->pause) {
-					EnterCriticalSection(&thread->data->lines_section);
+					platform_mutex_lock(thread->data->lines_mutex);
 					line_data.tag = logcat_get_tag(thread->data, tag);
 					thread->data->lines.add(line_data);
-					LeaveCriticalSection(&thread->data->lines_section);
+					platform_mutex_unlock(thread->data->lines_mutex);
 				}
 			} else {
 				line_buffer[line_buffer_pos++] = buffer[i];

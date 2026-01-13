@@ -1,12 +1,7 @@
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-#include <commdlg.h>
-
 #include <stdio.h>
+#include <ctype.h>
 
-#define GLFW_EXPOSE_NATIVE_WIN32
 #include <GLFW/glfw3.h>
-#include <GLFW/glfw3native.h>
 #include <glad/glad.h>
 
 #ifndef IMGUI_DEFINE_MATH_OPERATORS
@@ -21,6 +16,7 @@
 #include "array.h"
 #include "logdata.h"
 #include "device_finder.h"
+#include "platform.h"
 
 #define GLSL_VERSION "#version 330"
 
@@ -44,7 +40,9 @@ struct details_t {
 };
 details_t details = {};
 
-bool was_at_end = true;
+bool was_at_end    = true;
+bool filter_mode   = true;  // true = filter (hide non-matches), false = highlight (show all, highlight matches)
+bool highlight_pid = true;  // highlight lines with matching PID/TID when a line is selected
 char text_search [512] = {};
 char tag_search  [512] = {};
 char text_exclude[512] = {};
@@ -71,12 +69,13 @@ void      window_filters();
 void      window_details();
 
 void      ui_set_theme();
-GLFWimage load_icon_image(int resource_id) ;
+#ifdef PLATFORM_WINDOWS
+GLFWimage load_icon_image(int resource_id);
+#endif
 
 ///////////////////////////////////////////
 
-//int main() {
-int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, int nCmdShow) {
+int main(int argc, char** argv) {
 	if (!device_finder_start(&device_finder)) {
 		printf("Could not start device finder\n");
 		return 1;
@@ -85,11 +84,17 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 	
 	logcat_create(&logcat);
 
+#ifdef PLATFORM_LINUX
+	// On Linux, prefer X11 over Wayland for better window decoration support
+	glfwInitHint(GLFW_PLATFORM, GLFW_PLATFORM_X11);
+#endif
+
 	glfwInit();
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, 3);
 	glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, 3);
 	glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
 	glfwWindowHint(GLFW_OPENGL_PROFILE,        GLFW_OPENGL_CORE_PROFILE);
+	glfwWindowHint(GLFW_DECORATED, GLFW_TRUE);
 
 	GLFWwindow *window = glfwCreateWindow(1280, 720, "log-panther",
 										  nullptr, nullptr);
@@ -99,9 +104,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 		return -1;
 	}
 	glfwMakeContextCurrent(window);
-	
+
+#ifdef PLATFORM_WINDOWS
 	GLFWimage icon = load_icon_image(101);
 	glfwSetWindowIcon(window, 1, &icon);
+#endif
 
 	if (!gladLoadGLLoader((GLADloadproc) glfwGetProcAddress)) {
 		printf("Could not initialize GLAD");
@@ -151,7 +158,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PSTR pCmdLine, 
 
 		ImGui::Render();
 		ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
-		Sleep(1);
+		platform_sleep_ms(1);
 		glfwSwapBuffers(window);
 	}
 
@@ -176,7 +183,7 @@ enum item_select_ {
 };
 
 // Add a label+text combo aligned to other label+value widgets
-item_select_ ui_log_item(const char* label, const char* text, bool selected) {
+item_select_ ui_log_item(const char* label, const char* text, bool selected, bool highlight_related) {
 	ImGuiWindow* window = ImGui::GetCurrentWindow();
 	if (window->SkipItems)
 		return item_select_none;
@@ -201,6 +208,7 @@ item_select_ ui_log_item(const char* label, const char* text, bool selected) {
 	ImVec2 bmax = ImVec2(ImGui::GetWindowSize().x, total_bb.Max.y);
 	
 	ImGui::GetWindowDrawList()->AddRectFilled(ImVec2{0, label_bb.Min.y}, label_bb.Max + ImVec2{0, style.ItemSpacing.y}, IM_COL32(30, 30, 30, 255));
+	if (highlight_related && !selected) ImGui::GetWindowDrawList()->AddRectFilled({0,total_bb.Min.y}, total_bb.Max, IM_COL32(60, 100, 80, 100));
 	if (hovered || selected) ImGui::GetWindowDrawList()->AddRect({0,total_bb.Min.y}, total_bb.Max, IM_COL32(255, 255, 255, 100));
 
 	// Render the main text
@@ -303,23 +311,14 @@ void window_log() {
 		ImGui::Checkbox("Pause", &logcat_thread.pause);
 		ImGui::SameLine();
 		if (ImGui::Button("Save")) {
-			// open a dialog and ask for a filename
-			OPENFILENAME ofn = {};
 			char filename[512] = {};
-			ofn.lStructSize = sizeof(ofn);
-			ofn.hwndOwner   = glfwGetWin32Window(glfwGetCurrentContext());
-			ofn.lpstrFilter = "All Files\0*.*\0";
-			ofn.lpstrFile   = filename;
-			ofn.nMaxFile    = sizeof(filename);
-			ofn.lpstrTitle  = "Save Logcat";
-			ofn.Flags = OFN_DONTADDTORECENT | OFN_OVERWRITEPROMPT;
-			if (GetSaveFileName(&ofn)) {
+			if (platform_file_dialog_save(filename, sizeof(filename), "Save Logcat")) {
 				logcat_to_file(&logcat, filename);
 			}
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Trim ^")) {
-			EnterCriticalSection(&logcat.lines_section);
+			platform_mutex_lock(logcat.lines_mutex);
 			for (int32_t i = 0; i < details.selected; i++) {
 				free(logcat.lines[0].line);
 				logcat.lines.remove(0);
@@ -327,11 +326,11 @@ void window_log() {
 			details.selected  = 0;
 			details.focus_idx = 0;
 			details.focus_at  = 0.5f;
-			LeaveCriticalSection(&logcat.lines_section);
+			platform_mutex_unlock(logcat.lines_mutex);
 		}
 		ImGui::SameLine();
 		if (ImGui::Button("Trim v")) {
-			EnterCriticalSection(&logcat.lines_section);
+			platform_mutex_lock(logcat.lines_mutex);
 			int32_t count = logcat.lines.count;
 			for (int32_t i = details.selected+1; i < count; i++) {
 				free(logcat.lines[details.selected+1].line);
@@ -339,14 +338,24 @@ void window_log() {
 			}
 			details.focus_idx = details.selected;
 			details.focus_at  = 0.5f;
-			LeaveCriticalSection(&logcat.lines_section);
+			platform_mutex_unlock(logcat.lines_mutex);
 		}
 
 		ImGui::BeginChild("ScrollingRegion", ImVec2(0, 0), false, ImGuiWindowFlags_AlwaysVerticalScrollbar | ImGuiWindowFlags_HorizontalScrollbar);
 		// Get the bounds of the visible area
 		float start      = ImGui::GetItemRectMin().y;
 		float scroll_max = ImGui::GetWindowContentRegionMax().y - ImGui::GetWindowContentRegionMin().y;
-		EnterCriticalSection(&logcat.lines_section);
+		platform_mutex_lock(logcat.lines_mutex);
+
+		// Cache selected line's PID/TID for highlighting
+		uint16_t selected_pid = 0;
+		uint16_t selected_tid = 0;
+		bool     has_selection = details.selected >= 0 && details.selected < (int32_t)logcat.lines.count;
+		if (has_selection) {
+			selected_pid = logcat.lines[details.selected].pid;
+			selected_tid = logcat.lines[details.selected].tid;
+		}
+
 		for (size_t i = 0; i < logcat.lines.count; i++)
 		{
 			logcat_line_t line  = logcat.lines[i];
@@ -358,8 +367,8 @@ void window_log() {
 				was_at_end = false;
 			}
 
-			// If it has been filtered out, we don't want to display it at all.
-			if (i != details.selected && !valid) continue;
+			// In filter mode, skip items that don't match (unless selected)
+			if (filter_mode && i != details.selected && !valid) continue;
 
 			// Calculate a color for the line
 			ImVec4 color = {};
@@ -371,11 +380,13 @@ void window_log() {
 				case 'V': color = ImVec4(1, 1, 1, 1); break;
 				default:  color = ImVec4(1, 1, 1, 1); break;
 			}
+			// Dim non-matching items (in filter mode when selected, or in highlight mode)
 			if (!valid) color = ImVec4(color.x * 0.5f, color.y * 0.5f, color.z * 0.5f, color.w);
 
 			// Draw the line
+			bool highlight_related = highlight_pid && has_selection && (line.pid == selected_pid || line.tid == selected_tid);
 			ImGui::PushStyleColor(ImGuiCol_Text, color);
-			item_select_ select = ui_log_item(logcat.tags[line.tag], line.line, i == details.selected);
+			item_select_ select = ui_log_item(logcat.tags[line.tag], line.line, i == details.selected, highlight_related);
 			ImGui::PopStyleColor();
 
 			// Figure out if this line is visible
@@ -398,13 +409,20 @@ void window_log() {
 				else details.selected = i != details.selected ? i : -1;
 			}
 		}
-		LeaveCriticalSection(&logcat.lines_section);
+		platform_mutex_unlock(logcat.lines_mutex);
 
 		// Lock to the bottom, if the user scrolls to the bottom
-		bool is_at_end = ImGui::GetScrollY() == ImGui::GetScrollMaxY();
-		if (was_at_end && (!ImGui::IsItemHovered() || ImGui::GetIO().MouseWheel == 0) && details.focus_idx == -1)
+		float scroll_y     = ImGui::GetScrollY();
+		float scroll_y_max = ImGui::GetScrollMaxY();
+		bool is_near_end   = scroll_y_max <= 0 || scroll_y >= scroll_y_max - 20.0f;
+
+		// Only auto-scroll if we were at end AND still near end (user hasn't scrolled away)
+		if (was_at_end && is_near_end && details.focus_idx == -1) {
 			ImGui::SetScrollHereY(1.0f);
-		was_at_end = is_at_end;
+		} else {
+			// Update lock state: engage if near end, break if scrolled away
+			was_at_end = is_near_end;
+		}
 
 		ImGui::EndChild();
 	}
@@ -502,6 +520,17 @@ void window_filters() {
 	focus = ui_string_list("Text Exclude", &details.text_exclude, text_exclude, sizeof(text_exclude), &text_exclude_len) || focus;
 	focus = ui_string_list("Tag Exclude",  &details.tag_exclude,  tag_exclude,  sizeof(tag_exclude ), &tag_exclude_len ) || focus;
 
+	ImGui::SeparatorText("Mode");
+
+	static bool prev_filter_mode = filter_mode;
+	if (ImGui::RadioButton("Filter", filter_mode)) filter_mode = true;
+	ImGui::SameLine();
+	if (ImGui::RadioButton("Highlight", !filter_mode)) filter_mode = false;
+	if (prev_filter_mode != filter_mode) {
+		prev_filter_mode = filter_mode;
+		focus = true;
+	}
+
 	ImGui::Separator();
 
 	if (ImGui::Button("Reset All")) {
@@ -561,19 +590,22 @@ void window_details() {
 		ImGui::LabelText("Process ID", "%d", line.pid);
 		ImGui::LabelText("Thread ID", "%d", line.tid);
 		ImGui::LabelText("Severity", "%s", severity);
-		ImGui::LabelText("Time", "%d-%d %d:%d:%d.%d", line.month, line.day, line.hour, line.minute, line.second, line.time);
+		ImGui::LabelText("Time", "%d-%d %d:%d:%d.%d", line.month, line.day, line.hour, line.minute, line.second, line.millisecond);
 		ImGui::InputText("Tag", logcat.tags[line.tag], strlen(logcat.tags[line.tag]) + 1, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CallbackAlways, ui_select_all_callback);
 		ImGui::InputText("Line", line.line, strlen(line.line) + 1, ImGuiInputTextFlags_ReadOnly | ImGuiInputTextFlags_CallbackAlways, ui_select_all_callback);
 		ImGui::TextWrapped("%s", line.line);
 
 		ImGui::Separator();
 
-		if (ImGui::Button("Focus"))
+		if (ImGui::Button("Focus")) {
 			details.focus_idx = details.selected;
 			details.focus_at  = 0.5f;
+		}
 		ImGui::SameLine();
 		if (ImGui::Button("Deselect"))
 			details.selected = -1;
+		ImGui::SameLine();
+		ImGui::Checkbox("Highlight PID", &highlight_pid);
 	} else {
 		ImGui::Text("No line selected");
 	}
@@ -713,6 +745,11 @@ void ui_set_theme() {
 
 ///////////////////////////////////////////
 
+#ifdef PLATFORM_WINDOWS
+
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
+
 GLFWimage load_icon_image(int resource_id) {
 	HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(resource_id));
 	if (!hIcon) return {};
@@ -746,6 +783,8 @@ GLFWimage load_icon_image(int resource_id) {
 		image.pixels[i * 4 + 0] = image.pixels[i * 4 + 2];
 		image.pixels[i * 4 + 2] = t;
 	}
-	
+
 	return image;
 }
+
+#endif // PLATFORM_WINDOWS

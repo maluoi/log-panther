@@ -1,10 +1,9 @@
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 #include <stdint.h>
 
 #include "array.h"
+#include "platform.h"
 
 ///////////////////////////////////////////
 
@@ -27,15 +26,15 @@ struct logcat_data_t {
 	int32_t                lines_last;
 	array_t<logcat_line_t> lines;
 	array_t<char *>        tags;
-    CRITICAL_SECTION       lines_section;
+    platform_mutex_t       lines_mutex;
 	char                   src_id[64];
 };
 
 struct logcat_thread_t {
     logcat_data_t         *data;
-	HANDLE                 stdout_read;
-	HANDLE                 thread;
-	PROCESS_INFORMATION    proc_info;
+	platform_thread_t      thread;
+	platform_process_t     process;
+	platform_pipe_t        stdout_pipe;
 	bool                   run;
 	bool                   pause;
 };

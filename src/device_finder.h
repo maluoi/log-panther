@@ -1,9 +1,7 @@
 #pragma once
 
-#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
-
 #include "array.h"
+#include "platform.h"
 
 ///////////////////////////////////////////
 
@@ -22,7 +20,7 @@ struct device_info_t {
 struct device_finder_t {
     device_finder_state_   state;
     array_t<device_info_t> devices;
-	HANDLE                 thread;
+	platform_thread_t      thread;
 };
 
 bool device_finder_start  (device_finder_t *out_finder);
