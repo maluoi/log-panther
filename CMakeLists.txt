@@ -51,6 +51,7 @@ add_executable(log-panther ${EXECUTABLE_TYPE}
         src/main.cpp
         src/logdata.cpp
         src/device_finder.cpp
+        src/app_finder.cpp
         ${PLATFORM_SOURCES})
 
 target_include_directories(${PROJECT_NAME} PRIVATE "${IMGUI_DIR}/include")
