@@ -94,3 +94,9 @@ void platform_pipe_close(platform_pipe_t pipe);
 // Open a save file dialog. Returns true if user selected a file.
 // filename_buffer should be at least 512 bytes
 bool platform_file_dialog_save(char* filename_buffer, int32_t buffer_size, const char* title);
+
+///////////////////////////////////////////
+// Working directory
+
+// Set the current working directory to the executable's directory
+void platform_set_working_dir_to_exe();

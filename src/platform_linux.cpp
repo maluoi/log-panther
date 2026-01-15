@@ -289,4 +289,24 @@ bool platform_file_dialog_save(char* filename_buffer, int32_t buffer_size, const
     return false;
 }
 
+///////////////////////////////////////////
+// Working directory
+
+#include <linux/limits.h>
+
+void platform_set_working_dir_to_exe() {
+    char path[PATH_MAX];
+    ssize_t len = readlink("/proc/self/exe", path, sizeof(path) - 1);
+    if (len == -1) return;
+
+    path[len] = '\0';
+
+    // Find the last slash and terminate there
+    char* last_slash = strrchr(path, '/');
+    if (last_slash != nullptr) {
+        *last_slash = '\0';
+        chdir(path);
+    }
+}
+
 #endif // PLATFORM_LINUX

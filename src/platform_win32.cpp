@@ -231,4 +231,20 @@ bool platform_file_dialog_save(char* filename_buffer, int32_t buffer_size, const
     return GetSaveFileNameA(&ofn) != 0;
 }
 
+///////////////////////////////////////////
+// Working directory
+
+void platform_set_working_dir_to_exe() {
+    char path[MAX_PATH];
+    DWORD len = GetModuleFileNameA(NULL, path, MAX_PATH);
+    if (len == 0 || len >= MAX_PATH) return;
+
+    // Find the last backslash and terminate there
+    char* last_slash = strrchr(path, '\\');
+    if (last_slash != nullptr) {
+        *last_slash = '\0';
+        SetCurrentDirectoryA(path);
+    }
+}
+
 #endif // PLATFORM_WINDOWS

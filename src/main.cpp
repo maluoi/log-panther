@@ -76,6 +76,8 @@ GLFWimage load_icon_image(int resource_id);
 ///////////////////////////////////////////
 
 int main(int argc, char** argv) {
+	platform_set_working_dir_to_exe();
+
 	if (!device_finder_start(&device_finder)) {
 		printf("Could not start device finder\n");
 		return 1;
