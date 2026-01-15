@@ -60,16 +60,14 @@ int device_finder_thread(void* arg) {
 
     thread->devices.clear();
 
-    bool run = true;
-    while (run) {
-		// Make sure the process is still running
-		if (!platform_process_is_running(proc.process)) {
-			break;
-		}
-
+    while (true) {
 		// Check if data is available
 		int32_t available = platform_pipe_peek(proc.stdout_pipe);
 		if (available <= 0) {
+			// No data available - check if process is done
+			if (!platform_process_is_running(proc.process)) {
+				break; // Process done AND no more data
+			}
 			platform_sleep_ms(1);
 			continue;
 		}
