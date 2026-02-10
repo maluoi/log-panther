@@ -31,7 +31,7 @@ if(WIN32)
     set(PLATFORM_SOURCES
         src/platform_win32.cpp
         src/resources.rc)
-    set(EXECUTABLE_TYPE WIN32)
+    set(EXECUTABLE_TYPE "")
 else()
     set(PLATFORM_SOURCES
         src/platform_linux.cpp)
