@@ -1,5 +1,6 @@
 #include <stdio.h>
 #include <ctype.h>
+#include <cmath>
 
 #include <GLFW/glfw3.h>
 #include <glad/glad.h>
@@ -65,6 +66,13 @@ uint16_t pid_exclude_live = 0;
 
 bool show_copied_tooltip = false;
 bool drag_selecting = false;
+float zoom_scale = 1.0f;
+float pid_column_width = 50.0f;
+float tag_column_width = 100.0f;
+bool dragging_pid_column = false;
+bool dragging_tag_column = false;
+float drag_start_x = 0.0f;
+float drag_start_width = 0.0f;
 
 ///////////////////////////////////////////
 
@@ -149,6 +157,8 @@ int main(int argc, char** argv) {
 	config.OversampleH = 4;
 	ImFont* font = io.Fonts->AddFontFromFileTTF("CascadiaMono.ttf", 16.0f, &config);
 
+	io.FontGlobalScale = zoom_scale;
+
 	ui_set_theme();
 
 	while (!glfwWindowShouldClose(window)) {
@@ -215,14 +225,14 @@ item_select_ ui_log_item(uint16_t pid, const char* label, const char* text, bool
 	ImGuiContext& g = *GImGui;
 	const ImGuiStyle& style = g.Style;
 
-	// PID column (fixed width)
-	const float pid_width = 50;
+	// PID column (adjustable width)
+	const float pid_width = pid_column_width;
 	char pid_str[16];
 	snprintf(pid_str, sizeof(pid_str), "%d", pid);
 
 	ImVec2 label_full_size = ImGui::CalcTextSize(label, NULL, true);
 	ImVec2 label_size = label_full_size;
-	label_size.x = 100;
+	label_size.x = tag_column_width;
 
 	const ImRect pid_bb       (window->DC.CursorPos, window->DC.CursorPos + ImVec2(pid_width, label_size.y + style.FramePadding.y * 2));
 	const ImRect label_bb     (window->DC.CursorPos + ImVec2(pid_width, 0), window->DC.CursorPos + ImVec2(pid_width + label_size.x, label_size.y + style.FramePadding.y * 2));
@@ -263,8 +273,68 @@ item_select_ ui_log_item(uint16_t pid, const char* label, const char* text, bool
 		ImGui::RenderTextClipped(label_bb.Min, label_bb.Max, label, nullptr, NULL, ImVec2(0.0f, 0.5f));
 	}
 
-	bool left_clicked  = ImGui::IsItemClicked(ImGuiMouseButton_Left);
-	bool right_clicked = ImGui::IsItemClicked(ImGuiMouseButton_Right);
+	// Draw resize handles at column boundaries
+	const float resize_width = 4.0f;
+	const float resize_hover_width = 8.0f;
+	
+	// PID column resize handle
+	ImRect pid_resize_bb(ImVec2(pid_bb.Max.x - resize_hover_width/2, pid_bb.Min.y), 
+	                     ImVec2(pid_bb.Max.x + resize_hover_width/2, pid_bb.Max.y));
+	bool pid_resize_hovered = pid_resize_bb.Contains(ImGui::GetMousePos());
+	
+	// Tag column resize handle  
+	ImRect tag_resize_bb(ImVec2(label_bb.Max.x - resize_hover_width/2, label_bb.Min.y),
+	                     ImVec2(label_bb.Max.x + resize_hover_width/2, label_bb.Max.y));
+	bool tag_resize_hovered = tag_resize_bb.Contains(ImGui::GetMousePos());
+	
+	// Draw resize handle indicators when hovered
+	if (pid_resize_hovered || dragging_pid_column) {
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			ImVec2(pid_bb.Max.x - resize_width/2, pid_bb.Min.y),
+			ImVec2(pid_bb.Max.x + resize_width/2, pid_bb.Max.y),
+			IM_COL32(150, 150, 150, 255));
+		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+	}
+	
+	if (tag_resize_hovered || dragging_tag_column) {
+		ImGui::GetWindowDrawList()->AddRectFilled(
+			ImVec2(label_bb.Max.x - resize_width/2, label_bb.Min.y),
+			ImVec2(label_bb.Max.x + resize_width/2, label_bb.Max.y),
+			IM_COL32(150, 150, 150, 255));
+		ImGui::SetMouseCursor(ImGuiMouseCursor_ResizeEW);
+	}
+	
+	// Handle resize dragging
+	if (pid_resize_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+		dragging_pid_column = true;
+		drag_start_x = ImGui::GetMousePos().x;
+		drag_start_width = pid_column_width;
+	}
+	
+	if (tag_resize_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+		dragging_tag_column = true;
+		drag_start_x = ImGui::GetMousePos().x;
+		drag_start_width = tag_column_width;
+	}
+	
+	if (dragging_pid_column) {
+		float delta = ImGui::GetMousePos().x - drag_start_x;
+		pid_column_width = fmaxf(30.0f, fminf(150.0f, drag_start_width + delta));
+		if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+			dragging_pid_column = false;
+		}
+	}
+	
+	if (dragging_tag_column) {
+		float delta = ImGui::GetMousePos().x - drag_start_x;
+		tag_column_width = fmaxf(50.0f, fminf(300.0f, drag_start_width + delta));
+		if (!ImGui::IsMouseDown(ImGuiMouseButton_Left)) {
+			dragging_tag_column = false;
+		}
+	}
+
+	bool left_clicked  = ImGui::IsItemClicked(ImGuiMouseButton_Left) && !pid_resize_hovered && !tag_resize_hovered;
+	bool right_clicked = ImGui::IsItemClicked(ImGuiMouseButton_Right) && !pid_resize_hovered && !tag_resize_hovered;
 
 	if (left_clicked) {
 		if (pid_hovered)   return item_select_pid;
@@ -290,6 +360,23 @@ static int32_t ui_select_all_callback(ImGuiInputTextCallbackData* data) {
 ///////////////////////////////////////////
 
 void step() {
+	// Handle zoom with Ctrl + +/- and reset zoom with Ctrl + 0
+	ImGuiIO& io = ImGui::GetIO();
+	if (io.KeyCtrl) {
+		if (ImGui::IsKeyPressed(ImGuiKey_Minus, false)) {
+			zoom_scale = fmaxf(0.5f, zoom_scale - 0.1f);
+			ImGui::GetIO().FontGlobalScale = zoom_scale;
+		}
+		if (ImGui::IsKeyPressed(ImGuiKey_Equal, false)) {
+			zoom_scale = fminf(2.0f, zoom_scale + 0.1f);
+			ImGui::GetIO().FontGlobalScale = zoom_scale;
+		}
+		if (ImGui::IsKeyPressed(ImGuiKey_0, false)) {
+			zoom_scale = 1.0f;
+			ImGui::GetIO().FontGlobalScale = zoom_scale;
+		}
+	}
+
 	if (device_autoconnect && device_finder.state != device_finder_state_searching) { 
 		device_autoconnect = false;
 		if (device_finder.devices.count > 0) {
